@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect } from "react";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:4000";
+const API_BASE = "https://portfolio-tracker-api.onrender.com";
 
 export default function App() {
   const [symbol, setSymbol] = useState("AAPL");
