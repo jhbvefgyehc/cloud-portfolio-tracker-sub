@@ -1,196 +1,95 @@
-﻿import React, { useState, useEffect } from "react";
+﻿// server/index.js
+import express from "express";
+import axios from "axios";
+import cors from "cors";
+import dotenv from "dotenv";
 
-const API_BASE = import.meta.env.VITE_API_BASE||"https://portfolio-tracker-api.onrender.com";
-console.log("DEBUG:API BASE =",API_BASE);
+dotenv.config();
 
-export default function App() {
-  const [symbol, setSymbol] = useState("AAPL");
-  const [quantity, setQuantity] = useState(1);
-  const [avgPrice, setAvgPrice] = useState("");
-  const [holdings, setHoldings] = useState([]);
+const app = express();
+app.use(cors()); // allow all origins (ok for demo); change options for production
+app.use(express.json());
 
-  useEffect(() => {
-    // expose helper to manually add holdings from the browser console for quick testing:
-    // run: __ADD_HOLDING_FROM_CONSOLE({ id: 999, symbol: 'AAPL', quantity: 1, avgPrice: 100 })
-    window.__ADD_HOLDING_FROM_CONSOLE = (h) => {
-      try {
-        setHoldings(prev => Array.isArray(prev) ? [...prev, h] : [h]);
-        console.log("DEBUG: added from console", h);
-      } catch (e) {
-        console.error("DEBUG: add from console failed", e);
-      }
+const PORT = process.env.PORT || 4000;
+const API_KEY = process.env.FINNHUB_KEY || null;
+
+// in-memory holdings store — replace with DB later
+let holdings = [];
+let nextId = 1;
+
+// root
+app.get("/", (req, res) => res.json({ ok: true, message: "Portfolio Tracker API" }));
+
+// create holding
+app.post("/api/holdings", (req, res) => {
+  try {
+    const { symbol, quantity, avgPrice } = req.body || {};
+    if (!symbol || !quantity) return res.status(400).json({ error: "symbol and quantity required" });
+    const h = {
+      id: nextId++,
+      symbol: String(symbol).toUpperCase(),
+      quantity: Number(quantity),
+      avgPrice: Number(avgPrice || 0),
     };
-
-    fetchHoldings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function fetchHoldings() {
-    try {
-      console.log("DEBUG: fetching holdings...");
-      const r = await fetch(`${API_BASE}/api/holdings`);
-      if (!r.ok) {
-        console.error("DEBUG: fetchHoldings bad status", r.status);
-        setHoldings([]);
-        return;
-      }
-      const j = await r.json();
-      console.log("DEBUG: fetched holdings", j);
-      setHoldings(Array.isArray(j) ? j : []);
-    } catch (err) {
-      console.error("DEBUG: fetchHoldings error", err);
-      setHoldings([]);
-    }
+    holdings.push(h);
+    return res.json(h);
+  } catch (e) {
+    console.error("POST /api/holdings error", e);
+    return res.status(500).json({ error: "internal" });
   }
+});
 
-  async function addHolding(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    const body = {
-      symbol: String(symbol || "").toUpperCase(),
-      quantity: Number(quantity || 0),
-      avgPrice: Number(avgPrice || 0)
-    };
+// list holdings
+app.get("/api/holdings", (req, res) => res.json(holdings));
 
-    console.log("DEBUG: addHolding ->", body);
+// clear holdings
+app.post("/api/holdings/clear", (req, res) => {
+  holdings = [];
+  nextId = 1;
+  res.json({ ok: true });
+});
 
-    try {
-      const r = await fetch(`${API_BASE}/api/holdings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-
-      console.log("DEBUG: POST status =", r.status);
-      const json = await r.json();
-      console.log("DEBUG: POST response =", json);
-
-      if (!r.ok) {
-        alert("Add failed: " + (json?.error || r.status));
-        return;
-      }
-
-      setHoldings(prev => {
-        const next = Array.isArray(prev) ? [...prev, json] : [json];
-        console.log("DEBUG: updated holdings, length =", next.length);
-        return next;
-      });
-
-      // reset inputs a little for convenience
-      setSymbol("");
-      setQuantity(1);
-      setAvgPrice("");
-    } catch (err) {
-      console.error("DEBUG: addHolding error", err);
-      alert("Network or JS error. See console.");
-    }
+// price lookup - uses Finnhub if FINNHUB_KEY set in env, otherwise deterministic mock
+async function fetchPrice(symbol) {
+  if (!symbol) throw new Error("symbol required");
+  const s = String(symbol).toUpperCase();
+  if (!API_KEY) {
+    // deterministic mock so results look believable
+    const mockBase = Array.from(s).reduce((a, c) => a + c.charCodeAt(0), 0) % 200 + 20;
+    return Number((mockBase + (Math.random() * 5)).toFixed(2));
   }
-
-  async function fetchPrices() {
-    try {
-      console.log("DEBUG: fetching prices for", holdings.length, "holdings");
-      const updated = await Promise.all(holdings.map(async (h) => {
-        try {
-          // call /api/price (server supports it); falls back on server to mock if no API key
-          const r = await fetch(`${API_BASE}/api/price?symbol=${encodeURIComponent(h.symbol)}`);
-          if (!r.ok) {
-            console.warn("DEBUG: price fetch bad status for", h.symbol, r.status);
-            return { ...h, currentPrice: null };
-          }
-          const j = await r.json();
-          return { ...h, currentPrice: j.price };
-        } catch (e) {
-          console.error("DEBUG: price fetch error for", h.symbol, e);
-          return { ...h, currentPrice: null };
-        }
-      }));
-
-      console.log("DEBUG: updated holdings with prices", updated);
-      setHoldings(updated);
-    } catch (err) {
-      console.error("DEBUG: fetchPrices error", err);
-    }
-  }
-
-  function totalValue() {
-    return holdings.reduce((s, h) => s + ((h.currentPrice || 0) * h.quantity), 0).toFixed(2);
-  }
-
-  return (
-    <div style={{ padding: 24 }}>
-      <h1>Portfolio Tracker</h1>
-
-      <form onSubmit={addHolding} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input
-          value={symbol}
-          onChange={e => setSymbol(e.target.value)}
-          placeholder="Symbol (e.g. AAPL)"
-          style={{ padding: 6 }}
-        />
-        <input
-          value={quantity}
-          onChange={e => setQuantity(e.target.value)}
-          placeholder="Qty"
-          type="number"
-          style={{ width: 80, padding: 6 }}
-        />
-        <input
-          value={avgPrice}
-          onChange={e => setAvgPrice(e.target.value)}
-          placeholder="Avg price (optional)"
-          type="number"
-          step="0.01"
-          style={{ width: 140, padding: 6 }}
-        />
-        <button type="submit">Add</button>
-      </form>
-
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={fetchPrices}>Fetch prices</button>
-        <button
-          onClick={async () => {
-            try {
-              await fetch(`${API_BASE}/api/holdings/clear`, { method: "POST" });
-              setHoldings([]);
-            } catch (e) {
-              console.error("DEBUG: clear holdings error", e);
-            }
-          }}
-          style={{ marginLeft: 8 }}
-        >
-          Clear
-        </button>
-      </div>
-
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ textAlign: "left" }}>Symbol</th>
-            <th>Qty</th>
-            <th>Avg Price</th>
-            <th>Current</th>
-            <th>Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          {holdings.map(h => (
-            <tr key={h.id ?? `${h.symbol}-${Math.random()}`}>
-              <td style={{ padding: "6px 4px" }}>{h.symbol}</td>
-              <td style={{ textAlign: "center" }}>{h.quantity}</td>
-              <td style={{ textAlign: "center" }}>{h.avgPrice?.toFixed ? h.avgPrice.toFixed(2) : h.avgPrice}</td>
-              <td style={{ textAlign: "center" }}>{h.currentPrice != null ? Number(h.currentPrice).toFixed(2) : "-"}</td>
-              <td style={{ textAlign: "center" }}>{h.currentPrice != null ? (Number(h.currentPrice) * h.quantity).toFixed(2) : "-"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <div style={{ marginTop: 12 }}>
-        <strong>Total value:</strong> ${totalValue()}
-      </div>
-
-      <p style={{ marginTop: 12, fontSize: 12, color: "#666" }}>
-        Backend: {API_BASE} — set VITE_API_BASE to override.
-      </p>
-    </div>
-  );
+  const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(s)}&token=${API_KEY}`;
+  const r = await axios.get(url, { timeout: 5000 });
+  const price = r?.data?.c ?? null;
+  if (price === null) throw new Error("price not available");
+  return Number(price);
 }
+
+// /api/price endpoint
+app.get("/api/price", async (req, res) => {
+  const symbol = (req.query.symbol || "").toString();
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  try {
+    const price = await fetchPrice(symbol);
+    return res.json({ symbol: symbol.toUpperCase(), price, source: API_KEY ? "finnhub" : "mock" });
+  } catch (e) {
+    console.error("GET /api/price error", e && e.message);
+    return res.status(502).json({ error: "price_fetch_failed", detail: String(e) });
+  }
+});
+
+// keep older route name /api/quote (forward to same logic)
+app.get("/api/quote", async (req, res) => {
+  // call the same logic as /api/price
+  const symbol = (req.query.symbol || "").toString();
+  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  try {
+    const price = await fetchPrice(symbol);
+    return res.json({ symbol: symbol.toUpperCase(), price, source: API_KEY ? "finnhub" : "mock" });
+  } catch (e) {
+    console.error("GET /api/quote error", e && e.message);
+    return res.status(502).json({ error: "price_fetch_failed", detail: String(e) });
+  }
+});
+
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
