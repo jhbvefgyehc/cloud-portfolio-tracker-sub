@@ -1,8 +1,6 @@
 ﻿import React, { useState, useEffect } from "react";
 
-const API_BASE =
-  (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE) ||
-  "https://cloud-portfolio-tracker-sub.onrender.com";
+const API_BASE = import.meta.env.VITE_API_BASE || "https://cloud-portfolio-tracker-sub.onrender.com";
 
 console.log("DEBUG: API_BASE =", API_BASE);
 
